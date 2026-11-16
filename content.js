@@ -132,6 +132,25 @@
     if (r > 0 && overlay) hideOverlay();
   }
 
+  // ---- scroll lock: no scrolling behind a takeover ----
+  const scrollLocks = new Set();
+  const stopScroll = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const SCROLL_OPTS = { capture: true, passive: false };
+  let scrollLocked = false;
+  function lockScroll(owner, on) {
+    if (on) scrollLocks.add(owner); else scrollLocks.delete(owner);
+    const should = scrollLocks.size > 0;
+    if (should === scrollLocked) return;
+    scrollLocked = should;
+    if (should) {
+      window.addEventListener('wheel', stopScroll, SCROLL_OPTS);
+      window.addEventListener('touchmove', stopScroll, SCROLL_OPTS);
+    } else {
+      window.removeEventListener('wheel', stopScroll, SCROLL_OPTS);
+      window.removeEventListener('touchmove', stopScroll, SCROLL_OPTS);
+    }
+  }
+
   function showOverlay() {
     overlay = document.createElement('div');
     overlay.id = 'xbrake-overlay';
@@ -150,6 +169,7 @@
       ${canGrant ? `<button id="xbrake-hold"><div class="fill"></div><span>Hold for ${GRANT_MIN} more minutes</span></button>` : ''}
       <button id="xbrake-done">I'm done here — close the tab</button>`;
     document.body.appendChild(overlay);
+    lockScroll('overlay', true);
 
     overlay.querySelector('#xbrake-done').onclick = () => {
       overlay.querySelector('p').textContent = 'Nice. Use Cmd+W — future you says thanks.';
@@ -176,7 +196,7 @@
       btn.addEventListener('pointerleave', cancel);
     }
   }
-  function hideOverlay() { overlay?.remove(); overlay = null; }
+  function hideOverlay() { overlay?.remove(); overlay = null; lockScroll('overlay', false); }
 
   // ---- curfew + grayscale ----
   function hoursNow() { const d = new Date(); return d.getHours() + d.getMinutes() / 60; }
@@ -198,23 +218,30 @@
       back.onclick = () => history.back();
       shortsEl.appendChild(back);
       document.body.appendChild(shortsEl);
+      lockScroll('shorts', true);
     } else if (!onShorts && shortsEl) {
       shortsEl.remove();
       shortsEl = null;
+      lockScroll('shorts', false);
     }
     if (SITE === 'x' && inCurfew() && !curfewEl) {
       curfewEl = document.createElement('div');
       curfewEl.id = 'xbrake-overlay';
       curfewEl.innerHTML = `<h1>No socials in the morning.</h1><p>Blocked until noon. Go make something.</p>`;
       document.body.appendChild(curfewEl);
+      lockScroll('curfew', true);
     } else if (!inCurfew() && curfewEl) {
       curfewEl.remove();
       curfewEl = null;
+      lockScroll('curfew', false);
     }
   }
 
-  // ---- scroll-depth nudge: count tweets scrolled past, interrupt every NUDGE_EVERY ----
+  // ---- scroll-rate nudge ----
+  // Counts feed posts seen within a rolling NUDGE_WINDOW. Reading replies and
+  // slow engaged scrolling never trip it; sustained fast scrolling does.
   const NUDGE_EVERY = 25;
+  const NUDGE_WINDOW = 5 * 60e3;
   const seen = new WeakSet();
   function showNudge() {
     if (overlay || document.getElementById('xbrake-nudge')) return;
@@ -227,16 +254,18 @@
     p.textContent = `${mins} min gone. Still here on purpose?`;
     const btn = document.createElement('button');
     btn.textContent = 'Yep, keep scrolling';
-    btn.onclick = () => n.remove();
+    btn.onclick = () => { n.remove(); lockScroll('nudge', false); };
     n.appendChild(h);
     n.appendChild(p);
     n.appendChild(btn);
     document.body.appendChild(n);
+    lockScroll('nudge', true);
   }
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (e.isIntersecting && !seen.has(e.target)) {
         seen.add(e.target);
+        if (location.pathname.includes('/status/')) return; // reading replies, not scrolling the feed
         // dedupe by tweet URL so re-scrolling or refreshing doesn't re-count
         const link = e.target.querySelector('a[href*="/status/"], a[href*="/watch"], a[href*="/shorts/"]');
         const id = link ? link.href : null;
@@ -247,9 +276,11 @@
           if (Object.keys(state.seenIds).length > 2000) state.seenIds = {};
         }
         state.posts = (state.posts || 0) + 1;
+        const now = Date.now();
+        state.postTimes = (state.postTimes || []).filter(t => now - t < NUDGE_WINDOW).concat(now);
         save();
-        if (state.posts - (state.lastNudgeAt || 0) >= NUDGE_EVERY && (!BUDGET_ENABLED || remaining() > 0)) {
-          state.lastNudgeAt = state.posts;
+        if (state.postTimes.length >= NUDGE_EVERY && (!BUDGET_ENABLED || remaining() > 0)) {
+          state.postTimes = [];
           save();
           showNudge();
         }
