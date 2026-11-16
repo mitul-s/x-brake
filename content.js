@@ -305,10 +305,10 @@
     classifying = true;
     try {
       const body = {
-        model: 'zai/glm-4.5-flash', // cheapest on Vercel AI Gateway
+        model: 'moonshotai/kimi-k3', // available on Vercel Token Pass
         messages: [{ role: 'user', content:
           'Classify this YouTube channel as SLOP or OK. SLOP = attention-engineered brainrot: challenge/stunt videos, giveaways, sensationalism, retention hacking. OK = educational, documentary, music, cooking, craft, video essays, substance. Examples SLOP: MrBeast, Airrack, Ryan Trahan. Examples OK: Anthony Bourdain, NYT Cooking, lofi mixes. Reply with one word only.\nChannel: ' + name + '\nVideo: ' + title }],
-        max_tokens: 4
+        max_tokens: 50 // kimi is a reasoning model; 4 gets eaten by reasoning tokens
       };
       // route through the background worker: page CORS would block a direct fetch
       const r = await chrome.runtime.sendMessage({ type: 'classify', key: gatewayKey, body });
