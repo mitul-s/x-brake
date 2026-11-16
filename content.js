@@ -110,7 +110,8 @@
       const slopLeft = Math.max(0, (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60 - (state.slopSec || 0));
       pill.textContent = '';
       const t = document.createElement('span');
-      t.textContent = `${p}${fmt(slopLeft)} slop left`;
+      const judging = location.pathname === '/watch' && slopChannel === null;
+      t.textContent = judging ? `${p}judging…` : `${p}${fmt(slopLeft)} slop left`;
       pill.appendChild(t);
       if (location.pathname === '/watch' && slopChannel !== null) {
         const b = document.createElement('span');
@@ -303,27 +304,27 @@
     if (!gatewayKey || classifying) return false; // free pass while unknown
     classifying = true;
     try {
-      const res = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gatewayKey },
-        body: JSON.stringify({
-          model: 'openai/gpt-4.1-nano',
-          messages: [{ role: 'user', content:
-            'Classify this YouTube channel as SLOP or OK. SLOP = attention-engineered brainrot: challenge/stunt videos, giveaways, sensationalism, retention hacking. OK = educational, documentary, music, cooking, craft, video essays, substance. Examples SLOP: MrBeast, Airrack, Ryan Trahan. Examples OK: Anthony Bourdain, NYT Cooking, lofi mixes. Reply with one word only.\nChannel: ' + name + '\nVideo: ' + title }],
-          max_tokens: 4
-        })
-      });
-      const j = await res.json();
-      const verdict = /slop/i.test((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '');
-      cache[key] = verdict; slopCacheSet(cache);
-      return verdict;
+      const body = {
+        model: 'zai/glm-4.5-flash', // cheapest on Vercel AI Gateway
+        messages: [{ role: 'user', content:
+          'Classify this YouTube channel as SLOP or OK. SLOP = attention-engineered brainrot: challenge/stunt videos, giveaways, sensationalism, retention hacking. OK = educational, documentary, music, cooking, craft, video essays, substance. Examples SLOP: MrBeast, Airrack, Ryan Trahan. Examples OK: Anthony Bourdain, NYT Cooking, lofi mixes. Reply with one word only.\nChannel: ' + name + '\nVideo: ' + title }],
+        max_tokens: 4
+      };
+      // route through the background worker: page CORS would block a direct fetch
+      const r = await chrome.runtime.sendMessage({ type: 'classify', key: gatewayKey, body });
+      const text = r && r.j && r.j.choices && r.j.choices[0] && r.j.choices[0].message && r.j.choices[0].message.content;
+      if (r && r.ok && text) { cache[key] = /slop/i.test(text); slopCacheSet(cache); return cache[key]; }
+      return false; // error or empty: free pass, don't cache
     } catch { return false; } // fail open
     finally { classifying = false; }
   }
   function slopActive() { return (state.slopSec || 0) >= (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60; }
+  let lastVid = null;
   function tickYouTube() {
     if (SITE !== 'youtube') return;
     if (location.pathname === '/watch') {
+      const vid = new URLSearchParams(location.search).get('v');
+      if (vid !== lastVid) { lastVid = vid; slopChannel = null; } // reset verdict while judging new video
       const name = currentChannelName();
       if (name) {
         classifyChannel(name, document.title).then(v => { slopChannel = v; });

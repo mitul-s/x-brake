@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "description": "A daily time budget for X and YouTube. Shows remaining time, blurs the feed when you're over, blocks Shorts and mornings, and makes you hold a button to buy more minutes.",
   "permissions": ["storage"],
+  "host_permissions": ["https://ai-gateway.vercel.sh/*"],
+  "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",
     "default_title": "x-brake settings"
