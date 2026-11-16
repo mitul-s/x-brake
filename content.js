@@ -87,8 +87,9 @@
   style.textContent = css;
   document.head.appendChild(style);
 
-  const pill = BUDGET_ENABLED ? document.createElement('div') : null;
-  if (pill) { pill.id = 'xbrake-pill'; document.body.appendChild(pill); }
+  const pill = document.createElement('div');
+  pill.id = 'xbrake-pill';
+  document.body.appendChild(pill);
 
   let overlay = null;
   function fmt(sec) {
@@ -101,7 +102,13 @@
   }
 
   function render() {
-    if (!BUDGET_ENABLED) return; // YouTube: no pill, no budget
+    if (!BUDGET_ENABLED) {
+      // YouTube: no time budget, just a slop-allowance indicator
+      const slopLeft = Math.max(0, (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60 - (state.slopSec || 0));
+      pill.textContent = `${fmt(slopLeft)} slop left`;
+      pill.className = slopLeft <= 0 ? 'over' : slopLeft <= 300 ? 'warn' : '';
+      return;
+    }
     const r = remaining();
     pill.textContent = r > 0
       ? `${fmt(r)} left · ${state.posts || 0} scrolled`
