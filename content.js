@@ -107,7 +107,7 @@
     const p = state.paused ? 'paused · ' : '';
     if (!BUDGET_ENABLED) {
       // YouTube: no time budget, just a slop-allowance indicator
-      const slopLeft = Math.max(0, (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60 - (state.slopSec || 0));
+      const slopLeft = Math.max(0, (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60 - slopStoreGet());
       pill.textContent = '';
       const t = document.createElement('span');
       const judging = location.pathname === '/watch' && slopChannel === null;
@@ -269,7 +269,10 @@
   // Channels are classified once via Vercel AI Gateway and cached forever.
   // Slop channels get a shared daily budget; everything else is unrestricted.
   const SLOP_CHANNELS = ['mrbeast', 'airrack', 'ryan trahan', 'udy', 'nectar']; // manual overrides, lowercase
-  const SLOP_LIMIT_MIN = 20;
+  const SLOP_LIMIT_MIN = 60; // per week, not per day — a slop binge day is fine, daily grazing isn't
+  const weekKey = () => { const d = new Date(); const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7)); const y = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return t.getUTCFullYear() + '-W' + Math.ceil((((t - y) / 864e5) + 1) / 7); };
+  const slopStoreGet = () => { try { const s = JSON.parse(localStorage.getItem('xbrake:slopWeek') || '{}'); return s.week === weekKey() ? (s.sec || 0) : 0; } catch { return 0; } };
+  const slopStoreSet = (sec) => { try { localStorage.setItem('xbrake:slopWeek', JSON.stringify({ week: weekKey(), sec })); } catch {} };
   const slopCacheGet = () => { try { return JSON.parse(localStorage.getItem('xbrake:slopCache') || '{}'); } catch { return {}; } };
   const slopCacheSet = (v) => { try { localStorage.setItem('xbrake:slopCache', JSON.stringify(v)); } catch {} };
   let gatewayKey = null, slopChannel = null, classifying = false;
@@ -318,7 +321,7 @@
     } catch { return false; } // fail open
     finally { classifying = false; }
   }
-  function slopActive() { return (state.slopSec || 0) >= (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60; }
+  function slopActive() { return slopStoreGet() >= (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60; }
   let lastVid = null;
   function tickYouTube() {
     if (SITE !== 'youtube') return;
@@ -329,8 +332,7 @@
       if (name) {
         classifyChannel(name, document.title).then(v => { slopChannel = v; });
         if (slopChannel && !state.paused && document.visibilityState === 'visible') {
-          state.slopSec = (state.slopSec || 0) + 1;
-          save();
+          slopStoreSet(slopStoreGet() + 1);
         }
       }
     }
