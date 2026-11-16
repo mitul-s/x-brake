@@ -29,9 +29,9 @@
   async function load() {
     const s = lsGet();
     if (s.date !== DAY) {
-      state = { date: DAY, usedSec: 0, grants: 0, posts: 0, slopSec: 0, limitMin: s.limitMin || DEFAULT_LIMIT_MIN };
+      state = { date: DAY, usedSec: 0, grants: 0, posts: 0, slopSec: 0, paused: false, limitMin: s.limitMin || DEFAULT_LIMIT_MIN };
     } else {
-      state = { limitMin: DEFAULT_LIMIT_MIN, usedSec: 0, grants: 0, posts: 0, slopSec: 0, ...s };
+      state = { limitMin: DEFAULT_LIMIT_MIN, usedSec: 0, grants: 0, posts: 0, slopSec: 0, paused: false, ...s };
     }
     try {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -89,7 +89,9 @@
 
   const pill = document.createElement('div');
   pill.id = 'xbrake-pill';
+  pill.style.cursor = 'pointer';
   document.body.appendChild(pill);
+  pill.addEventListener('click', () => { state.paused = !state.paused; save(); render(); });
 
   let overlay = null;
   function fmt(sec) {
@@ -102,16 +104,27 @@
   }
 
   function render() {
+    const p = state.paused ? 'paused · ' : '';
     if (!BUDGET_ENABLED) {
       // YouTube: no time budget, just a slop-allowance indicator
       const slopLeft = Math.max(0, (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60 - (state.slopSec || 0));
-      pill.textContent = `${fmt(slopLeft)} slop left`;
+      pill.textContent = '';
+      const t = document.createElement('span');
+      t.textContent = `${p}${fmt(slopLeft)} slop left`;
+      pill.appendChild(t);
+      if (location.pathname === '/watch' && slopChannel !== null) {
+        const b = document.createElement('span');
+        b.textContent = slopChannel ? ' · not slop?' : ' · slop?';
+        b.style.cssText = 'text-decoration:underline;cursor:pointer;opacity:.75';
+        b.onclick = (e) => { e.stopPropagation(); toggleSlopOverride(); };
+        pill.appendChild(b);
+      }
       pill.className = slopLeft <= 0 ? 'over' : slopLeft <= 300 ? 'warn' : '';
       return;
     }
     const r = remaining();
     pill.textContent = r > 0
-      ? `${fmt(r)} left · ${state.posts || 0} scrolled`
+      ? `${p}${fmt(r)} left · ${state.posts || 0} scrolled`
       : `over budget (+${state.grants}/${MAX_GRANTS} extensions)`;
     pill.className = r <= 0 ? 'over' : r <= 300 ? 'warn' : '';
     if (r <= 0 && !overlay && !inCurfew()) showOverlay();
@@ -258,7 +271,23 @@
   const SLOP_LIMIT_MIN = 20;
   const slopCacheGet = () => { try { return JSON.parse(localStorage.getItem('xbrake:slopCache') || '{}'); } catch { return {}; } };
   const slopCacheSet = (v) => { try { localStorage.setItem('xbrake:slopCache', JSON.stringify(v)); } catch {} };
-  let gatewayKey = null, slopChannel = false, classifying = false;
+  let gatewayKey = null, slopChannel = null, classifying = false;
+  const overridesGet = () => { try { return JSON.parse(localStorage.getItem('xbrake:slopOverrides') || '{}'); } catch { return {}; } };
+  const overridesSet = (v) => { try { localStorage.setItem('xbrake:slopOverrides', JSON.stringify(v)); } catch {} };
+  function currentChannelName() {
+    const ch = [...document.querySelectorAll('ytd-channel-name a, #channel-name a, ytd-video-owner-renderer a')].find(a => a.textContent.trim());
+    return ch ? ch.textContent.trim() : '';
+  }
+  function toggleSlopOverride() {
+    const name = currentChannelName();
+    if (!name) return;
+    const key = name.toLowerCase();
+    const ov = overridesGet();
+    ov[key] = !slopChannel;
+    overridesSet(ov);
+    slopChannel = !slopChannel;
+    render();
+  }
   try {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get('xbrake').then(o => { gatewayKey = (o.xbrake && o.xbrake.gatewayKey) || null; });
@@ -266,6 +295,8 @@
   } catch {}
   async function classifyChannel(name, title) {
     const key = name.toLowerCase();
+    const ov = overridesGet();
+    if (key in ov) return ov[key]; // your call always wins
     const cache = slopCacheGet();
     if (key in cache) return cache[key];
     if (SLOP_CHANNELS.some(s => key.includes(s))) { cache[key] = true; slopCacheSet(cache); return true; }
@@ -293,11 +324,10 @@
   function tickYouTube() {
     if (SITE !== 'youtube') return;
     if (location.pathname === '/watch') {
-      const ch = [...document.querySelectorAll('ytd-channel-name a, #channel-name a, ytd-video-owner-renderer a')].find(a => a.textContent.trim());
-      const name = ch ? ch.textContent.trim() : '';
+      const name = currentChannelName();
       if (name) {
         classifyChannel(name, document.title).then(v => { slopChannel = v; });
-        if (slopChannel && document.visibilityState === 'visible') {
+        if (slopChannel && !state.paused && document.visibilityState === 'visible') {
           state.slopSec = (state.slopSec || 0) + 1;
           save();
         }
@@ -315,7 +345,7 @@
     await load();
     render();
     setInterval(() => {
-      if (active()) { state.usedSec++; save(); }
+      if (active() && !state.paused) { state.usedSec++; save(); }
       render();
       applyMode();
       tickYouTube();
