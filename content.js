@@ -29,9 +29,9 @@
   async function load() {
     const s = lsGet();
     if (s.date !== DAY) {
-      state = { date: DAY, usedSec: 0, grants: 0, posts: 0, limitMin: s.limitMin || DEFAULT_LIMIT_MIN };
+      state = { date: DAY, usedSec: 0, grants: 0, posts: 0, slopSec: 0, limitMin: s.limitMin || DEFAULT_LIMIT_MIN };
     } else {
-      state = { limitMin: DEFAULT_LIMIT_MIN, usedSec: 0, grants: 0, posts: 0, ...s };
+      state = { limitMin: DEFAULT_LIMIT_MIN, usedSec: 0, grants: 0, posts: 0, slopSec: 0, ...s };
     }
     try {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -116,11 +116,16 @@
     overlay.id = 'xbrake-overlay';
     const canGrant = state.grants < MAX_GRANTS;
     const holdMs = HOLD_LADDER[Math.min(state.grants, HOLD_LADDER.length - 1)];
+    const slopMode = SITE === 'youtube';
     overlay.innerHTML = `
-      <h1>That's your ${SITE_NAME} time for today.</h1>
-      <p>You set a ${state.limitMin}-minute daily budget and you've used it.
-         Close the tab, or hold the button for ${holdMs / 1000}s to buy ${GRANT_MIN} more minutes
-         (${MAX_GRANTS - state.grants} left today).</p>
+      <h1>${slopMode ? "That's your slop for today." : `That's your ${SITE_NAME} time for today.`}</h1>
+      <p>${slopMode
+        ? `${SLOP_LIMIT_MIN} min of attention-engineered content is the daily allowance.
+           Close the tab, or hold the button for ${holdMs / 1000}s to buy ${GRANT_MIN} more slop minutes
+           (${MAX_GRANTS - state.grants} left today).`
+        : `You set a ${state.limitMin}-minute daily budget and you've used it.
+           Close the tab, or hold the button for ${holdMs / 1000}s to buy ${GRANT_MIN} more minutes
+           (${MAX_GRANTS - state.grants} left today).`}</p>
       ${canGrant ? `<button id="xbrake-hold"><div class="fill"></div><span>Hold for ${GRANT_MIN} more minutes</span></button>` : ''}
       <button id="xbrake-done">I'm done here — close the tab</button>`;
     document.body.appendChild(overlay);
@@ -239,39 +244,59 @@
     watchTweets();
   }
 
-  // ---- slop graze detector (YouTube watch pages) ----
-  // Leaving a video in under GRAZE_MAX_SEC = one graze. Long sessions (music,
-  // essays, movies) never count. GRAZE_LIMIT grazes/hour = intervention.
-  const GRAZE_MAX_SEC = 90;
-  const GRAZE_LIMIT = 8;
-  const GRAZE_WINDOW = 3600e3;
-  let currentVid = null, watchStart = 0, slopEl = null, lastSlopWarn = 0;
-  const grazes = [];
-  function recordGraze() {
-    if (!watchStart) return;
-    const watched = (Date.now() - watchStart) / 1000;
-    if (watched > 5 && watched < GRAZE_MAX_SEC) grazes.push(Date.now());
-    watchStart = 0;
+  // ---- AI slop judge (YouTube watch pages) ----
+  // Channels are classified once via Vercel AI Gateway and cached forever.
+  // Slop channels get a shared daily budget; everything else is unrestricted.
+  const SLOP_CHANNELS = ['mrbeast', 'airrack', 'ryan trahan', 'udy', 'nectar']; // manual overrides, lowercase
+  const SLOP_LIMIT_MIN = 20;
+  const slopCacheGet = () => { try { return JSON.parse(localStorage.getItem('xbrake:slopCache') || '{}'); } catch { return {}; } };
+  const slopCacheSet = (v) => { try { localStorage.setItem('xbrake:slopCache', JSON.stringify(v)); } catch {} };
+  let gatewayKey = null, slopChannel = false, classifying = false;
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get('xbrake').then(o => { gatewayKey = (o.xbrake && o.xbrake.gatewayKey) || null; });
+    }
+  } catch {}
+  async function classifyChannel(name, title) {
+    const key = name.toLowerCase();
+    const cache = slopCacheGet();
+    if (key in cache) return cache[key];
+    if (SLOP_CHANNELS.some(s => key.includes(s))) { cache[key] = true; slopCacheSet(cache); return true; }
+    if (!gatewayKey || classifying) return false; // free pass while unknown
+    classifying = true;
+    try {
+      const res = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gatewayKey },
+        body: JSON.stringify({
+          model: 'openai/gpt-4.1-nano',
+          messages: [{ role: 'user', content:
+            'Classify this YouTube channel as SLOP or OK. SLOP = attention-engineered brainrot: challenge/stunt videos, giveaways, sensationalism, retention hacking. OK = educational, documentary, music, cooking, craft, video essays, substance. Examples SLOP: MrBeast, Airrack, Ryan Trahan. Examples OK: Anthony Bourdain, NYT Cooking, lofi mixes. Reply with one word only.\nChannel: ' + name + '\nVideo: ' + title }],
+          max_tokens: 4
+        })
+      });
+      const j = await res.json();
+      const verdict = /slop/i.test((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '');
+      cache[key] = verdict; slopCacheSet(cache);
+      return verdict;
+    } catch { return false; } // fail open
+    finally { classifying = false; }
   }
+  function slopActive() { return (state.slopSec || 0) >= (SLOP_LIMIT_MIN + state.grants * GRANT_MIN) * 60; }
   function tickYouTube() {
     if (SITE !== 'youtube') return;
-    const vid = new URLSearchParams(location.search).get('v');
-    if (location.pathname === '/watch' && vid) {
-      if (vid !== currentVid) { recordGraze(); currentVid = vid; watchStart = Date.now(); }
-    } else if (currentVid) { recordGraze(); currentVid = null; }
-    const cutoff = Date.now() - GRAZE_WINDOW;
-    while (grazes.length && grazes[0] < cutoff) grazes.shift();
-    if (grazes.length >= GRAZE_LIMIT && !slopEl && Date.now() - lastSlopWarn > GRAZE_WINDOW) {
-      lastSlopWarn = Date.now();
-      slopEl = document.createElement('div');
-      slopEl.id = 'xbrake-nudge';
-      slopEl.innerHTML = `<h2>${grazes.length} videos in the last hour.</h2><p>Most under ${GRAZE_MAX_SEC} seconds each. That's slop grazing, not watching.</p>`;
-      const b = document.createElement('button');
-      b.textContent = 'Fair. Done grazing';
-      b.onclick = () => { slopEl.remove(); slopEl = null; };
-      slopEl.appendChild(b);
-      document.body.appendChild(slopEl);
+    if (location.pathname === '/watch') {
+      const ch = [...document.querySelectorAll('ytd-channel-name a, #channel-name a, ytd-video-owner-renderer a')].find(a => a.textContent.trim());
+      const name = ch ? ch.textContent.trim() : '';
+      if (name) {
+        classifyChannel(name, document.title).then(v => { slopChannel = v; });
+        if (slopChannel && document.visibilityState === 'visible') {
+          state.slopSec = (state.slopSec || 0) + 1;
+          save();
+        }
+      }
     }
+    if (slopActive() && !overlay) showOverlay();
   }
 
   // ---- timer: only counts while tab is visible AND focused ----

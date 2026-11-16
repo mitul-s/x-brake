@@ -17,7 +17,9 @@
 <body>
   <h1>x-brake</h1>
   <label for="limit">Daily budget per site (minutes)</label>
-  <input id="limit" type="number" min="1" max="480" value="30">
+  <input id="limit" type="number" min="1" max="480" value="10">
+  <label for="gkey" style="margin-top:10px">AI Gateway key (YouTube slop judge)</label>
+  <input id="gkey" type="password" placeholder="vck_...">
   <button id="save">Save</button>
   <div id="status"></div>
   <script src="popup.js"></script>
