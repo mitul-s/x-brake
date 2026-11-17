@@ -103,6 +103,10 @@
     return Math.max(0, state.limitMin * 60 + state.grants * GRANT_MIN * 60 - state.usedSec);
   }
 
+  // utility surfaces (DMs, notifications, bookmarks) are always free —
+  // the feed is the trap, these aren't
+  const onUtility = () => SITE === 'x' && /^\/(messages|notifications|settings|compose|i\/chat|i\/bookmarks)/.test(location.pathname);
+
   function render() {
     const p = state.paused ? 'paused · ' : '';
     if (!BUDGET_ENABLED) {
@@ -128,7 +132,8 @@
       ? `${p}${fmt(r)} left · ${state.posts || 0} scrolled`
       : `over budget (+${state.grants}/${MAX_GRANTS} extensions)`;
     pill.className = r <= 0 ? 'over' : r <= 300 ? 'warn' : '';
-    if (r <= 0 && !overlay && !inCurfew()) showOverlay();
+    if (onUtility() && overlay) hideOverlay(); // escaped to a utility surface
+    if (r <= 0 && !overlay && !inCurfew() && !onUtility()) showOverlay();
     if (r > 0 && overlay) hideOverlay();
   }
 
@@ -224,13 +229,13 @@
       shortsEl = null;
       lockScroll('shorts', false);
     }
-    if (SITE === 'x' && inCurfew() && !curfewEl) {
+    if (SITE === 'x' && inCurfew() && !curfewEl && !onUtility()) {
       curfewEl = document.createElement('div');
       curfewEl.id = 'xbrake-overlay';
       curfewEl.innerHTML = `<h1>No socials in the morning.</h1><p>Blocked until noon. Go make something.</p>`;
       document.body.appendChild(curfewEl);
       lockScroll('curfew', true);
-    } else if (!inCurfew() && curfewEl) {
+    } else if ((!inCurfew() || onUtility()) && curfewEl) {
       curfewEl.remove();
       curfewEl = null;
       lockScroll('curfew', false);
@@ -265,7 +270,7 @@
     for (const e of entries) {
       if (e.isIntersecting && !seen.has(e.target)) {
         seen.add(e.target);
-        if (location.pathname.includes('/status/')) return; // reading replies, not scrolling the feed
+        if (location.pathname.includes('/status/') || onUtility()) return; // reading replies or using DMs, not scrolling the feed
         // dedupe by tweet URL so re-scrolling or refreshing doesn't re-count
         const link = e.target.querySelector('a[href*="/status/"], a[href*="/watch"], a[href*="/shorts/"]');
         const id = link ? link.href : null;
@@ -379,7 +384,7 @@
     await load();
     render();
     setInterval(() => {
-      if (active() && !state.paused) { state.usedSec++; save(); }
+      if (active() && !state.paused && !onUtility()) { state.usedSec++; save(); }
       render();
       applyMode();
       tickYouTube();
