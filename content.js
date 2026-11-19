@@ -367,12 +367,25 @@
       const name = currentChannelName();
       if (name) {
         classifyChannel(name, document.title).then(v => { slopChannel = v; });
-        if (slopChannel && !state.paused && document.visibilityState === 'visible') {
+        if (slopChannel && !state.paused && document.visibilityState === 'visible' && iAmOwner()) {
           slopStoreSet(slopStoreGet() + 1);
         }
       }
     }
     if (slopActive() && !overlay) showOverlay();
+  }
+
+  // ---- single-writer heartbeat ----
+  // Only the newest script instance (across tabs AND orphaned instances left by
+  // extension reloads) may count time. Prevents double/triple drain.
+  const INSTANCE = Math.random().toString(36).slice(2);
+  function iAmOwner() {
+    const now = Date.now();
+    let hb;
+    try { hb = JSON.parse(localStorage.getItem('xbrake:hb:' + SITE) || '{}'); } catch { hb = {}; }
+    if (hb.id && hb.id !== INSTANCE && now - hb.t < 3000) return false;
+    try { localStorage.setItem('xbrake:hb:' + SITE, JSON.stringify({ id: INSTANCE, t: now })); } catch {}
+    return true;
   }
 
   // ---- timer: only counts while tab is visible AND focused ----
@@ -384,7 +397,7 @@
     await load();
     render();
     setInterval(() => {
-      if (active() && !state.paused && !onUtility()) { state.usedSec++; save(); }
+      if (active() && !state.paused && !onUtility() && iAmOwner()) { state.usedSec++; save(); }
       render();
       applyMode();
       tickYouTube();
